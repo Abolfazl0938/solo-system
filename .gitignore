@@ -1,0 +1,17 @@
+# محیط مجازی (Virtual Environment)
+.venv/
+venv/
+
+# فایل‌ها و پوشه‌های کش پایتون
+__pycache__/
+*.py[cod]
+*$py.class
+
+# کش و فایل‌های تست Pytest
+.pytest_cache/
+
+# نادیده گرفتن تمام فایل‌های JSON داخل پوشه data
+data/*.json
+
+# استثنا: حفظ فایل .gitkeep داخل پوشه data (علامت ! برای استثنا کردن است)
+!data/.gitkeep
