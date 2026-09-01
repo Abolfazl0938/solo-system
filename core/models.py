@@ -1,6 +1,10 @@
 from enum import Enum
 
 
+class QuestNotFoundError(Exception):
+    pass
+
+
 class QuestStatus(Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
@@ -41,13 +45,13 @@ class Player:
     def add_quest(self, quest: Quest) -> None:
         self.quests.append(quest)
 
-    def complete_quest(self, quest_id: int) -> bool:
+    def complete_quest(self, quest_id: int) -> None:
         for i in self.quests:
             if i.id == quest_id:
                 i.complete()
                 self.gain_exp(i.reward_exp)
-                return True
-        return False
+                return
+        raise QuestNotFoundError(f"Quest with ID {quest_id} not found")
 
     def __str__(self) -> str:
         return f"Player(Name: {self.name}, Level: {self.level}, HP: {self.hp}, EXP: {self.exp})"

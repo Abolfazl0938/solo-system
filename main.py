@@ -1,6 +1,6 @@
 # main.py
 from core.utils import get_system_status
-from core.models import Player, Quest
+from core.models import Player, Quest, QuestNotFoundError
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -26,6 +26,10 @@ def display_dashboard():
 
     # تکمیل مأموریت اول
     player.complete_quest(quest_id=1)
+    try:
+        player.complete_quest(quest_id=100)
+    except QuestNotFoundError as e:
+        console.print(f"[bold red]⚠ Quest Error:[/bold red] {e}")
 
     # 3. جدول مشخصات بازیکن
     p_table = Table(
