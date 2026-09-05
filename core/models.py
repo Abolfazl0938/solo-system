@@ -24,6 +24,23 @@ class Quest:
         self.reward_exp: int = reward_exp
         self.status: QuestStatus = status
 
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "reward_exp": self.reward_exp,
+            "status": self.status.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Quest":
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            reward_exp=data["reward_exp"],
+            status=QuestStatus(data["status"]),
+        )
+
     def complete(self) -> None:
         self.status = QuestStatus.COMPLETED
 
@@ -41,6 +58,35 @@ class Player:
 
     def gain_exp(self, amount: int) -> None:
         self.exp += amount
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "quests": [q.to_dict() for q in self.quests],
+            "level": self.level,
+            "hp": self.hp,
+            "exp": self.exp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Player":
+        # 1. ساخت اولیه Player بدون quests
+        player_instance = cls(
+            name=data["name"],
+            level=data.get("level", 1),  # استفاده از .get برای امنیت بیشتر
+            hp=data.get("hp", 100),
+            exp=data.get("exp", 0),
+        )
+
+        # 2. بازسازی و اضافه کردن quests
+        # اطمینان از وجود کلید quests و اینکه لیست است
+        if "quests" in data and isinstance(data["quests"], list):
+            for quest_data in data["quests"]:
+                # فراخوانی Quest.from_dict برای هر کوئست
+                quest_instance = Quest.from_dict(quest_data)
+                player_instance.add_quest(quest_instance)  # اضافه کردن به لیست player
+
+        return player_instance
 
     def add_quest(self, quest: Quest) -> None:
         self.quests.append(quest)
