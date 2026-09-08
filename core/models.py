@@ -11,6 +11,19 @@ class QuestStatus(Enum):
     FAILED = "FAILED"
 
 
+class HunterRank(Enum):
+    E = ("E-Rank", 0)
+    D = ("D-Rank", 4)
+    C = ("C-Rank", 9)
+    B = ("B-Rank", 14)
+    A = ("A-Rank", 19)
+    S = ("S-Rank", 20)
+
+    def __init__(self, title: str, required_completed: int):
+        self.title = title
+        self.required_completed = required_completed
+
+
 class Quest:
     def __init__(
         self,
@@ -70,34 +83,52 @@ class Player:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Player":
-        # 1. ساخت اولیه Player بدون quests
         player_instance = cls(
             name=data["name"],
-            level=data.get("level", 1),  # استفاده از .get برای امنیت بیشتر
+            level=data.get("level", 1),
             hp=data.get("hp", 100),
             exp=data.get("exp", 0),
         )
 
-        # 2. بازسازی و اضافه کردن quests
-        # اطمینان از وجود کلید quests و اینکه لیست است
         if "quests" in data and isinstance(data["quests"], list):
             for quest_data in data["quests"]:
-                # فراخوانی Quest.from_dict برای هر کوئست
                 quest_instance = Quest.from_dict(quest_data)
-                player_instance.add_quest(quest_instance)  # اضافه کردن به لیست player
+                player_instance.add_quest(quest_instance)
 
         return player_instance
 
     def add_quest(self, quest: Quest) -> None:
         self.quests.append(quest)
 
+    def completed_quest_count(self) -> int:
+        """شمارش کوئست‌هایی که وضعیت آن‌ها COMPLETED است."""
+        return sum(1 for q in self.quests if q.status == QuestStatus.COMPLETED)
+
+    @property
+    def rank(self) -> HunterRank:
+        completed = self.completed_quest_count()
+        if completed >= 20:
+            return HunterRank.S
+        elif completed >= 19:
+            return HunterRank.A
+        elif completed >= 14:
+            return HunterRank.B
+        elif completed >= 9:
+            return HunterRank.C
+        elif completed >= 4:
+            return HunterRank.D
+        else:
+            return HunterRank.E
+
     def complete_quest(self, quest_id: int) -> None:
-        for i in self.quests:
-            if i.id == quest_id:
-                i.complete()
-                self.gain_exp(i.reward_exp)
+        for quest in self.quests:
+            if quest.id == quest_id:
+                if quest.status == QuestStatus.COMPLETED:
+                    return  # جلوگیری از دادن اکسپی تکراری
+                quest.complete()
+                self.gain_exp(quest.reward_exp)
                 return
         raise QuestNotFoundError(f"Quest with ID {quest_id} not found")
 
     def __str__(self) -> str:
-        return f"Player(Name: {self.name}, Level: {self.level}, HP: {self.hp}, EXP: {self.exp})"
+        return f"Player(Name: {self.name}, Rank: {self.rank.title}, Level: {self.level}, HP: {self.hp}, EXP: {self.exp})"

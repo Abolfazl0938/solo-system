@@ -1,9 +1,9 @@
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
-from rich.prompt import Prompt, IntPrompt
 
-from core.models import Player, Quest, QuestNotFoundError
+from core.models import HunterRank, Player, Quest, QuestNotFoundError, QuestStatus
 from services.storage import StorageService
 
 console = Console()
@@ -22,14 +22,38 @@ def display_quests_table(player: Player) -> None:
     table.add_column("Status", justify="center")
 
     for q in player.quests:
-        status_text = (
-            "[bold green]COMPLETED[/bold green]"
-            if q.status.value == "COMPLETED"
-            else "[bold yellow]PENDING[/bold yellow]"
-        )
+        if q.status == QuestStatus.COMPLETED:
+            status_text = "[bold green]COMPLETED[/bold green]"
+        elif q.status == QuestStatus.FAILED:
+            status_text = "[bold red]FAILED[/bold red]"
+        else:
+            status_text = "[bold yellow]PENDING[/bold yellow]"
+
         table.add_row(str(q.id), q.title, f"+{q.reward_exp} EXP", status_text)
 
     console.print(table)
+
+
+def display_player_status(player: Player) -> None:
+    """Render comprehensive hunter stats card."""
+    rank_color = "magenta" if player.rank == HunterRank.S else "cyan"
+
+    status_content = (
+        f"[bold white]Name:[/bold white] {player.name}\n"
+        f"[bold {rank_color}]Rank:[/bold {rank_color}] [{rank_color}]{player.rank.title}[/{rank_color}]\n"
+        f"[bold white]Level:[/bold white] {player.level}\n"
+        f"[bold red]HP:[/bold red] {player.hp}/100\n"
+        f"[bold green]EXP:[/bold green] {player.exp}\n"
+        f"[bold blue]Completed Quests:[/bold blue] {player.completed_quest_count()}"
+    )
+
+    console.print(
+        Panel(
+            status_content,
+            title=f"👤 Hunter Profile: {player.name}",
+            border_style="cyan",
+        )
+    )
 
 
 def main() -> None:
@@ -68,13 +92,7 @@ def main() -> None:
             break
 
         elif command == "status":
-            console.print(
-                Panel(
-                    str(player),
-                    title=f"👤 Hunter Profile: {player.name}",
-                    border_style="cyan",
-                )
-            )
+            display_player_status(player)
 
         elif command == "add":
             quest_id = IntPrompt.ask("[cyan]Enter Quest ID[/cyan]")
@@ -97,7 +115,7 @@ def main() -> None:
             try:
                 player.complete_quest(quest_id)
                 console.print(
-                    f"[bold green]🎉 Quest #{quest_id} completed! EXP rewarded.[/bold green]"
+                    f"[bold green]🎉 Quest #{quest_id} completed! Current Rank: {player.rank.title}[/bold green]"
                 )
             except QuestNotFoundError as e:
                 console.print(f"[bold red]❌ Error: {e}[/bold red]")
