@@ -1,18 +1,21 @@
 from core.models import Player
 import os
 import json
+from core.decorators import system_logger
 
 
 class StorageService:
     def __init__(self, filepath: str = "data/player_save.json"):
         self.filepath = filepath
 
+    @system_logger
     def save_player(self, player: Player) -> None:
         os.makedirs("data", exist_ok=True)
         dictform_of_player = player.to_dict()
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(dictform_of_player, f, indent=4)
 
+    @system_logger
     def load_player_data(self):
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:

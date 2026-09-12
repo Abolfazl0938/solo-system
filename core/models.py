@@ -1,4 +1,5 @@
 from enum import Enum
+from core.decorators import system_logger
 
 
 class QuestNotFoundError(Exception):
@@ -120,6 +121,7 @@ class Player:
         else:
             return HunterRank.E
 
+    @system_logger
     def complete_quest(self, quest_id: int) -> None:
         for quest in self.quests:
             if quest.id == quest_id:
