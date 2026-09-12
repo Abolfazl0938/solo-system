@@ -1,0 +1,2 @@
+class InsufficientRankError(Exception):
+    pass
