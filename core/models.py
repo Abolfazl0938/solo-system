@@ -145,6 +145,12 @@ class Player:
             f"Player indices must be integers, slices, or strings, not {type(item).__name__}"
         )
 
+    def filter_quests(self, status: QuestStatus) -> Iterator["Quest"]:
+        """تولید تنبل (Lazy) کوئست‌ها بر اساس وضعیت آنها بدون اشغال حافظه اضافی"""
+        for quest in self.quests:
+            if quest.status == status:
+                yield quest
+
     def __contains__(self, item: Union[Quest, str]) -> bool:
         """پشتیبانی از عملگر in:
 
