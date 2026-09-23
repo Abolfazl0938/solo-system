@@ -21,13 +21,13 @@ def infinite_floor_generator() -> Generator[Dict[str, Any], None, None]:
         floor += 1
 
 
-def generate_dungeon_run(
-    floor_count: int = 3,
-) -> Generator[Dict[str, Any], None, None]:
-    """تولید تعداد مشخصی از طبقات دانجن به صورت استریم شده"""
-    floor_gen = infinite_floor_generator()
-    for _ in range(floor_count):
-        yield next(floor_gen)
+def generate_dungeon_run(max_floors: int = 5) -> Generator[Dict[str, Any], None, None]:
+    for floor in range(1, max_floors + 1):
+        yield {
+            "floor": floor,
+            "info": f"Floor {floor} Cleared",
+            "difficulty": "Normal" if floor < 3 else "Hard",
+        }
 
 
 if __name__ == "__main__":
