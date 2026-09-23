@@ -1,134 +1,176 @@
+import asyncio
+import os
+import sys
+import time
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
+from rich.prompt import Prompt
 
-from core.models import HunterRank, Player, Quest, QuestNotFoundError, QuestStatus
-from services.storage import StorageService
+# افزودن مسیر ریشه پروژه
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from core.models import Player, Quest, QuestStatus
+from core.context_managers import DungeonRaidSession, quest_transaction
+from services.dungeon_service import generate_dungeon_run
+from services.network_service import NetworkService
 
 console = Console()
 
 
-def display_quests_table(player: Player) -> None:
-    """Render player quests inside a clean terminal table."""
-    if not player.quests:
-        console.print("[yellow]No quests found in the quest log![/yellow]")
-        return
+def display_status(player: Player) -> None:
+    """نمایش پنل مشخصات بازیکن با فرمت‌بندی مدرن"""
+    info = (
+        f"[bold cyan]Name:[/bold cyan] {player.name}  |  "
+        f"[bold yellow]Rank:[/bold yellow] {player.rank.name}  |  "
+        f"[bold green]Level:[/bold green] {player.level}  |  "
+        f"[bold magenta]EXP:[/bold magenta] {player.exp}/100"
+    )
+    console.print(
+        Panel(info, title="[bold blue]HUNTER STATUS[/bold blue]", border_style="cyan")
+    )
 
-    table = Table(title="📜 DAILY QUEST LOG", show_lines=True)
-    table.add_column("Quest ID", justify="center", style="cyan", no_wrap=True)
+
+def display_quests(player: Player) -> None:
+    """نمایش جدول کوئست‌ها با استفاده از پروتکل کانتینر Player"""
+    table = Table(
+        title="[bold green]ACTIVE QUESTS LOG[/bold green]", border_style="bright_blue"
+    )
+    table.add_column("Index", style="dim", justify="center")
+    table.add_column("ID", style="bold yellow")
     table.add_column("Title", style="white")
-    table.add_column("Reward (EXP)", justify="center", style="green")
     table.add_column("Status", justify="center")
+    table.add_column("Reward (EXP)", justify="right", style="cyan")
 
-    for q in player.quests:
-        if q.status == QuestStatus.COMPLETED:
-            status_text = "[bold green]COMPLETED[/bold green]"
-        elif q.status == QuestStatus.FAILED:
-            status_text = "[bold red]FAILED[/bold red]"
-        else:
-            status_text = "[bold yellow]PENDING[/bold yellow]"
-
-        table.add_row(str(q.id), q.title, f"+{q.reward_exp} EXP", status_text)
+    if len(player) == 0:
+        table.add_row("-", "-", "No active quests registered.", "-", "-")
+    else:
+        for idx, quest in enumerate(player):
+            status_color = (
+                "green" if quest.status == QuestStatus.COMPLETED else "yellow"
+            )
+            table.add_row(
+                str(idx),
+                quest.id,
+                quest.title,
+                f"[{status_color}]{quest.status.value}[/{status_color}]",
+                f"+{quest.exp_reward}",
+            )
 
     console.print(table)
 
 
-def display_player_status(player: Player) -> None:
-    """Render comprehensive hunter stats card."""
-    rank_color = "magenta" if player.rank == HunterRank.S else "cyan"
+async def run_gate_scan() -> None:
+    """اجرای اسکن ناهمگام گیت‌ها"""
+    console.print("[bold yellow]Connecting to Satellite Gate Radar...[/bold yellow]")
+    gates = ["Gate-Alpha", "Gate-Red", "Gate-Omega", "Gate-Shadow"]
 
-    status_content = (
-        f"[bold white]Name:[/bold white] {player.name}\n"
-        f"[bold {rank_color}]Rank:[/bold {rank_color}] [{rank_color}]{player.rank.title}[/{rank_color}]\n"
-        f"[bold white]Level:[/bold white] {player.level}\n"
-        f"[bold red]HP:[/bold red] {player.hp}/100\n"
-        f"[bold green]EXP:[/bold green] {player.exp}\n"
-        f"[bold blue]Completed Quests:[/bold blue] {player.completed_quest_count()}"
-    )
+    start = time.perf_counter()
+    results = await NetworkService.scan_all_gates(gates)
+    elapsed = time.perf_counter() - start
 
+    table = Table(title="[bold red]RADAR SCAN RESULTS[/bold red]", border_style="red")
+    table.add_column("Gate ID", style="bold white")
+    table.add_column("Status", justify="center")
+    table.add_column("Danger Rank", justify="center", style="bold red")
+    table.add_column("Ping", justify="right", style="dim")
+
+    for res in results:
+        table.add_row(
+            res["gate_id"], res["status"], res["danger_level"], res["response_time"]
+        )
+
+    console.print(table)
+    console.print(f"[dim]All scans completed in {elapsed:.2f}s concurrently.[/dim]\n")
+
+
+def simulate_dungeon_raid(player: Player) -> None:
+    """شبیه‌سازی دانجن با کانتکست منیجر و ارزیابی تنبل طبقات"""
+    dungeon_name = "Demon Castle"
     console.print(
-        Panel(
-            status_content,
-            title=f"👤 Hunter Profile: {player.name}",
-            border_style="cyan",
-        )
+        f"\n[bold magenta]Preparing raid team for {dungeon_name}...[/bold magenta]"
     )
 
+    with DungeonRaidSession(player, dungeon_name) as session:
+        for floor_data in generate_dungeon_run(floor_count=3):
+            console.print(
+                f" -> Clearing [bold yellow]{floor_data['floor']}[/bold yellow] | Monster: {floor_data['monster']} | EXP: +{floor_data['exp']}"
+            )
+            time.sleep(0.3)
+        session.mark_cleared()
+        player.gain_exp(120)
 
-def main() -> None:
-    storage = StorageService()
-    data = storage.load_player_data()
 
-    console.print(
-        Panel.fit(
-            "[bold magenta]⚡ SOLO SYSTEM CORE INITIALIZING ⚡[/bold magenta]",
-            border_style="magenta",
-        )
-    )
+def add_quest_safely(player: Player) -> None:
+    """افزودن کوئست جدید در قالب تراکنش اتمیک با Rollback"""
+    quest_id = f"q{len(player) + 1}"
+    title = Prompt.ask("[cyan]Enter quest title[/cyan]")
+    exp = int(Prompt.ask("[cyan]Enter EXP reward[/cyan]", default="50"))
 
-    # 1. Loading / Initialization Phase
-    if data is not None:
-        player = Player.from_dict(data)
-        console.print(
-            f"[bold green]✔ Welcome back, Hunter {player.name}![/bold green]\n"
-        )
-    else:
-        name = Prompt.ask("[bold cyan]Enter new hunter name[/bold cyan]")
-        player = Player(name=name)
-        console.print(
-            f"[bold green]✔ New hunter profile initialized for {name}.[/bold green]\n"
-        )
-
-    # 2. Game Loop Phase
-    while True:
-        console.print(
-            "\n[dim]Available commands: [cyan]status[/cyan] | [cyan]add[/cyan] | [cyan]list[/cyan] | [cyan]complete[/cyan] | [red]exit[/red][/dim]"
-        )
-        command = Prompt.ask("[bold yellow]SYSTEM[/bold yellow] >>").strip().lower()
-
-        if command == "exit":
-            console.print("[bold red]Shutting down system...[/bold red]")
-            break
-
-        elif command == "status":
-            display_player_status(player)
-
-        elif command == "add":
-            quest_id = IntPrompt.ask("[cyan]Enter Quest ID[/cyan]")
-            quest_title = Prompt.ask("[cyan]Enter Quest Title[/cyan]")
-            quest_reward_exp = IntPrompt.ask("[cyan]Enter Reward EXP[/cyan]")
-
+    try:
+        with quest_transaction(player):
             new_quest = Quest(
-                id=quest_id, title=quest_title, reward_exp=quest_reward_exp
+                id=quest_id,
+                title=title,
+                description=f"Task: {title}",
+                exp_reward=exp,
+                status=QuestStatus.PENDING,
             )
             player.add_quest(new_quest)
             console.print(
-                f"[bold green]✔ Quest '{quest_title}' registered successfully.[/bold green]"
+                "[bold green]✔ Quest committed to system memory successfully![/bold green]"
             )
+    except Exception as err:
+        console.print(f"[bold red]✘ Transaction aborted:[/bold red] {err}")
 
-        elif command == "list":
-            display_quests_table(player)
 
-        elif command == "complete":
-            quest_id = IntPrompt.ask("[cyan]Enter target Quest ID to complete[/cyan]")
-            try:
-                player.complete_quest(quest_id)
-                console.print(
-                    f"[bold green]🎉 Quest #{quest_id} completed! Current Rank: {player.rank.title}[/bold green]"
-                )
-            except QuestNotFoundError as e:
-                console.print(f"[bold red]❌ Error: {e}[/bold red]")
+async def main_loop() -> None:
+    # ساخت پلیر اولیه
+    player = Player(name="Sung Jin-Woo", level=1)
 
-        else:
-            console.print("[bold red]Unknown command! Please try again.[/bold red]")
+    # همگام‌سازی اولیه از طریق سرور ناهمگام
+    await NetworkService.sync_player_data(player)
 
-    # 3. Teardown & Persistence Phase
-    storage.save_player(player)
-    console.print(
-        "[bold green]💾 System data saved successfully. Farewell, Hunter![/bold green]"
+    # کوئست‌های پیش‌فرض اولیه
+    player.add_quest(
+        Quest("q1", "Daily Push-ups", "Do 100 pushups", 40, QuestStatus.COMPLETED)
     )
+    player.add_quest(Quest("q2", "Daily Run", "Run 10km", 60, QuestStatus.PENDING))
+
+    while True:
+        console.clear()
+        display_status(player)
+        display_quests(player)
+
+        console.print("\n[bold]SYSTEM MENU:[/bold]")
+        console.print("1. [cyan]Add New Quest (Atomic Transaction)[/cyan]")
+        console.print(
+            "2. [magenta]Raid Dungeon (Generator + Context Manager)[/magenta]"
+        )
+        console.print("3. [yellow]Scan Gates Radar (Async/Await Concurrent)[/yellow]")
+        console.print("4. [red]Exit System[/red]")
+
+        choice = Prompt.ask(
+            "\n[bold green]Select an option[/bold green]",
+            choices=["1", "2", "3", "4"],
+            default="4",
+        )
+
+        if choice == "1":
+            add_quest_safely(player)
+            Prompt.ask("\nPress Enter to continue...")
+        elif choice == "2":
+            simulate_dungeon_raid(player)
+            Prompt.ask("\nPress Enter to continue...")
+        elif choice == "3":
+            await run_gate_scan()
+            Prompt.ask("\nPress Enter to continue...")
+        elif choice == "4":
+            console.print(
+                "[bold cyan]System entering sleep mode. Goodbye, Hunter.[/bold cyan]"
+            )
+            break
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_loop())
