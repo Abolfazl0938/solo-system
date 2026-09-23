@@ -1,6 +1,10 @@
+"""Domain models for Hunter and Quest management."""
+
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-from dataclasses import dataclass
-from typing import List, Iterator, Any
+from typing import Any, Dict, List, Optional
+from services.time_service import TimeService
 
 
 class QuestStatus(Enum):
@@ -11,90 +15,90 @@ class QuestStatus(Enum):
 
 @dataclass
 class Quest:
-    id: int
     title: str
-    description: str
-    reward_exp: int
-    rank: str = "E"
+    exp_reward: int
     status: QuestStatus = QuestStatus.PENDING
-
-    @property
-    def is_completed(self) -> bool:
-        return self.status == QuestStatus.COMPLETED
+    created_at: dict = field(default_factory=TimeService.get_current_timestamps)
+    completed_at: Optional[dict] = None
 
     def complete(self) -> None:
         self.status = QuestStatus.COMPLETED
+        self.completed_at = TimeService.get_current_timestamps()
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         return {
-            "id": self.id,
             "title": self.title,
-            "description": self.description,
-            "reward_exp": self.reward_exp,
-            "rank": self.rank,
+            "exp_reward": self.exp_reward,
             "status": self.status.value,
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Quest":
-        status_val = data.get("status", QuestStatus.PENDING.value)
-        return cls(
-            id=data["id"],
+    def from_dict(cls, data: Dict[str, Any]) -> "Quest":
+        quest = cls(
             title=data["title"],
-            description=data["description"],
-            reward_exp=data["reward_exp"],
-            rank=data.get("rank", "E"),
-            status=(
-                QuestStatus(status_val) if isinstance(status_val, str) else status_val
-            ),
+            exp_reward=data["exp_reward"],
+            status=QuestStatus(data.get("status", QuestStatus.PENDING.value)),
         )
+        quest.created_at = data.get("created_at", TimeService.get_current_timestamps())
+        quest.completed_at = data.get("completed_at")
+        return quest
 
 
+@dataclass
 class Player:
-    def __init__(
-        self, name: str, level: int = 1, exp: int = 0, rank: str = "E"
-    ) -> None:
-        self.name = name
-        self.level = level
-        self.exp = exp
-        self.rank = rank
-        self.quests: List[Quest] = []
+    name: str
+    level: int = 1
+    exp: int = 0
+    rank: str = "E"
+    quests: List[Quest] = field(default_factory=list)
 
-    def add_quest(self, quest: Quest) -> None:
-        self.quests.append(quest)
-
-    def gain_exp(self, amount: int) -> None:
-        self.exp += amount
-        while self.exp >= self.level * 100:
-            self.exp -= self.level * 100
-            self.level += 1
-
-    # --- Container & Magic Methods ---
     def __len__(self) -> int:
         return len(self.quests)
 
-    def __iter__(self) -> Iterator[Quest]:
-        return iter(self.quests)
+    def __getitem__(self, index: int) -> Quest:
+        return self.quests[index]
 
-    def __getitem__(self, item: Any) -> Quest:
-        if isinstance(item, int):
-            return self.quests[item]
-        elif isinstance(item, str):
-            for quest in self.quests:
-                if quest.title == item:
-                    return quest
-            raise KeyError(f"Quest with title '{item}' not found.")
-        raise TypeError("Index must be int or str.")
+    def __iter__(self):
+        return iter(self.quests)
 
     def __contains__(self, item: Any) -> bool:
         if isinstance(item, Quest):
             return item in self.quests
-        elif isinstance(item, str):
+        if isinstance(item, str):
             return any(q.title == item for q in self.quests)
         return False
 
-    # --- Serialization Methods ---
-    def to_dict(self) -> dict:
+    def add_exp(self, amount: int) -> bool:
+        self.exp += amount
+        leveled_up = False
+        while self.exp >= self.exp_to_next_level:
+            self.exp -= self.exp_to_next_level
+            self.level += 1
+            self._update_rank()
+            leveled_up = True
+        return leveled_up
+
+    @property
+    def exp_to_next_level(self) -> int:
+        return self.level * 100
+
+    def _update_rank(self) -> None:
+        if self.level >= 50:
+            self.rank = "S"
+        elif self.level >= 40:
+            self.rank = "A"
+        elif self.level >= 30:
+            self.rank = "B"
+        elif self.level >= 20:
+            self.rank = "C"
+        elif self.level >= 10:
+            self.rank = "D"
+        else:
+            self.rank = "E"
+
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "level": self.level,
@@ -104,16 +108,12 @@ class Player:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Player":
+    def from_dict(cls, data: Dict[str, Any]) -> "Player":
         player = cls(
             name=data["name"],
-            level=data.get("level", 1),
-            exp=data.get("exp", 0),
-            rank=data.get("rank", "E"),
+            level=data["level"],
+            exp=data["exp"],
+            rank=data["rank"],
         )
-        for q_data in data.get("quests", []):
-            player.add_quest(Quest.from_dict(q_data))
+        player.quests = [Quest.from_dict(q) for q in data.get("quests", [])]
         return player
-
-    def __repr__(self) -> str:
-        return f"<Player {self.name} | Rank: {self.rank} | Level: {self.level}>"
