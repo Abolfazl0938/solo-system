@@ -7,6 +7,23 @@ class StorageService:
     DATA_DIR = Path("data")
 
     @classmethod
+    def delete_profile(cls, name: str) -> bool:
+        """حذف فایل ذخیره‌ی پروفایل؛ اگر فایل نبود، False برمی‌گرداند."""
+        name = name.strip()
+
+        # فقط نام فایل را قبول می‌کنیم؛ مسیرهایی مثل ../ را رد می‌کنیم.
+        if not name or Path(name).name != name or name in {".", ".."}:
+            return False
+
+        file_path = cls.DATA_DIR / f"{name}.json"
+
+        try:
+            file_path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+
+    @classmethod
     def list_profiles(cls) -> list[str]:
         cls.DATA_DIR.mkdir(exist_ok=True)
         files = list(cls.DATA_DIR.glob("*.json"))

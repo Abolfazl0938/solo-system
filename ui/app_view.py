@@ -1,9 +1,8 @@
 """
 Solo Leveling UI — ui/app_view.py
-Flet 0.24.0 compatible view:
-profiles, HUD, standard quests, timed focus quest, and dungeon.
-
-The focus timer uses page.run_task() and asyncio.sleep().
+Flet 0.24.0 compact desktop layout:
+Two-column HUD & Quest dashboard, centered circular focus timer,
+dungeon log, and local JSON profile storage.
 """
 
 import asyncio
@@ -13,26 +12,28 @@ import sys
 
 import flet as ft
 
-# Make the project root importable when running gui_main.py directly.
+# Make the project root importable when running directly
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
-
 
 from core.models import Player, Quest, QuestStatus
 from services.dungeon_service import generate_dungeon_run
 from services.storage_service import StorageService
 
 TICK_COUNT = 60
-RING_DIAMETER = 140
-STACK_SIZE = 200
+RING_DIAMETER = 130
+STACK_SIZE = 160
 CENTER_OFFSET = STACK_SIZE / 2
-DOT_SIZE = 8
+DOT_SIZE = 7
 
 COLOR_ACTIVE = "#00e5ff"
 COLOR_INACTIVE = "#12324a"
 COLOR_ACCENT = "#a855f7"
+COLOR_SUCCESS = "#4ade80"
 GLASS_BG = "#0a0f1e"
+CARD_BG = "#0f172a"
+BORDER_COLOR = "#1e3a5f"
 
 FLOOR_CAP = 20
 XP_PER_FLOOR = 25
@@ -103,221 +104,307 @@ class SoloLevelingView:
     def _build_ui(self) -> None:
         self.page.bgcolor = GLASS_BG
         self.page.title = "Solo Leveling — Hunter System"
-        self.page.padding = 20
+        self.page.padding = 14
+        self.page.spacing = 10
 
-        # Profile controls
+        # Profile selection
         self.profile_dropdown = ft.Dropdown(
-            label="Select Hunter Profile",
-            width=280,
+            label="Select Hunter",
+            height=40,
+            content_padding=8,
+            text_size=13,
             options=[],
             on_change=self._on_profile_selected,
+            expand=True,
         )
         self.new_profile_field = ft.TextField(
             label="New Hunter Name",
-            width=180,
+            height=40,
+            content_padding=8,
+            text_size=13,
             hint_text="e.g. Sung Jin-Woo",
+            expand=True,
         )
         self.create_profile_btn = ft.ElevatedButton(
-            "＋ Create Profile",
+            "＋ Create",
+            height=40,
             on_click=self._on_create_profile,
         )
 
         # Player HUD
         self.name_text = ft.Text(
-            "—",
-            size=26,
-            weight=ft.FontWeight.BOLD,
-            color=COLOR_ACTIVE,
+            "—", size=22, weight=ft.FontWeight.BOLD, color=COLOR_ACTIVE
         )
         self.rank_text = ft.Text(
-            "Rank: —",
-            color=COLOR_ACCENT,
-            weight=ft.FontWeight.BOLD,
+            "Rank: —", size=13, color=COLOR_ACCENT, weight=ft.FontWeight.BOLD
         )
-        self.level_text = ft.Text("Level: —", color="#ffffff")
-        self.exp_text = ft.Text("EXP: —", color="#9fb8c8")
+        self.level_text = ft.Text(
+            "Level: —", size=13, color="#ffffff", weight=ft.FontWeight.BOLD
+        )
+        self.exp_text = ft.Text("EXP: —", size=12, color="#9fb8c8")
         self.progress_bar = ft.ProgressBar(
-            value=0,
-            width=320,
-            color=COLOR_ACTIVE,
-            bgcolor="#12324a",
+            value=0, height=8, color=COLOR_ACTIVE, bgcolor="#12324a"
         )
 
-        # Standard quests
+        # Quests Controls
         self.quest_title_field = ft.TextField(
             label="Quest Title",
-            width=280,
+            height=38,
+            content_padding=8,
+            text_size=13,
+            expand=True,
         )
         self.quest_exp_field = ft.TextField(
-            label="EXP Reward",
-            width=120,
-            hint_text="e.g. 50",
+            label="EXP",
+            width=70,
+            height=38,
+            content_padding=8,
+            text_size=13,
+            hint_text="50",
         )
         self.add_quest_btn = ft.ElevatedButton(
-            "Add Quest",
-            on_click=self._on_add_quest,
+            "Add", height=38, on_click=self._on_add_quest
         )
-        self.quests_list = ft.Column(
-            spacing=8,
-            scroll=ft.ScrollMode.AUTO,
-        )
+        self.quests_list = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO, expand=True)
 
-        # Timed focus quest
+        # Timed Focus Controls
         self.timer_minutes_field = ft.TextField(
-            label="Minutes",
-            width=100,
-            hint_text="25",
+            label="Min",
+            width=65,
+            height=38,
+            content_padding=8,
+            text_size=13,
             value="25",
         )
         self.timer_title_field = ft.TextField(
             label="Focus Quest Title",
-            width=170,
+            height=38,
+            content_padding=8,
+            text_size=13,
             hint_text="Deep Work",
+            expand=True,
         )
         self.timer_start_btn = ft.ElevatedButton(
-            "▶ Start Focus",
-            on_click=self._on_start_timer,
+            "▶ Start", height=34, on_click=self._on_start_timer
         )
         self.timer_abort_btn = ft.ElevatedButton(
-            "■ Abort",
-            on_click=self._on_abort_timer,
-            disabled=True,
+            "■ Abort", height=34, on_click=self._on_abort_timer, disabled=True
         )
+        self.timer_status_text = ft.Text("Ready", color="#9fb8c8", size=12)
+
+        # Dedicated centered text inside ring
         self.countdown_text = ft.Text(
             "00:00",
-            size=30,
+            size=26,
             weight=ft.FontWeight.BOLD,
             color=COLOR_ACTIVE,
-        )
-        self.timer_status_text = ft.Text(
-            "Ready",
-            color="#9fb8c8",
-            size=12,
+            text_align=ft.TextAlign.CENTER,
         )
         self.ring = self._build_segmented_ring()
 
-        # Dungeon
-        self.dungeon_log = ft.Text(
-            "",
-            color="#9fb8c8",
-            size=12,
-            selectable=True,
-            expand=True,
-        )
+        # Dungeon Controls
         self.dungeon_floors_field = ft.TextField(
             label="Floors",
-            width=80,
+            width=70,
+            height=38,
+            content_padding=8,
+            text_size=13,
             value="5",
         )
         self.dungeon_btn = ft.ElevatedButton(
-            "⚔ Enter Dungeon",
-            on_click=self._on_enter_dungeon,
+            "⚔ Enter Dungeon", height=38, on_click=self._on_enter_dungeon
         )
+        self.dungeon_log = ft.Text("", color="#9fb8c8", size=11, selectable=True)
 
-        # Page layout
-        self.page.add(
-            ft.Column(
+        # Assembly: Left Panel (Profile + HUD + Dungeon)
+        left_panel = ft.Container(
+            content=ft.Column(
                 [
+                    # Top profile selector row
                     ft.Row(
                         [
                             self.profile_dropdown,
                             self.new_profile_field,
                             self.create_profile_btn,
                         ],
-                        wrap=True,
-                        spacing=8,
+                        spacing=6,
                     ),
-                    ft.Divider(color="#12324a"),
+                    # Hunter HUD Card
                     ft.Container(
-                        ft.Column(
+                        content=ft.Column(
                             [
-                                self.name_text,
-                                self.rank_text,
-                                self.level_text,
+                                ft.Row(
+                                    [
+                                        self.name_text,
+                                        ft.Row(
+                                            [self.rank_text, self.level_text],
+                                            spacing=10,
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                ),
                                 self.exp_text,
                                 self.progress_bar,
-                            ]
+                            ],
+                            spacing=6,
                         ),
-                        padding=16,
-                        border_radius=16,
-                        bgcolor=ft.colors.with_opacity(0.08, "#ffffff"),
-                        border=ft.border.all(1, "#1e3a5f"),
-                    ),
-                    ft.Divider(color="#12324a"),
-                    ft.Text(
-                        "STANDARD QUESTS",
-                        color=COLOR_ACCENT,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                    ft.Row(
-                        [
-                            self.quest_title_field,
-                            self.quest_exp_field,
-                            self.add_quest_btn,
-                        ],
-                        wrap=True,
-                        spacing=8,
-                    ),
-                    self.quests_list,
-                    ft.Divider(color="#12324a"),
-                    ft.Text(
-                        "TIMED FOCUS QUEST",
-                        color=COLOR_ACCENT,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                    ft.Row(
-                        [self.timer_minutes_field, self.timer_title_field],
-                        wrap=True,
-                        spacing=8,
-                    ),
-                    ft.Row(
-                        [
-                            self.timer_start_btn,
-                            self.timer_abort_btn,
-                            self.timer_status_text,
-                        ],
-                        spacing=8,
-                    ),
-                    ft.Container(
-                        self.ring,
-                        alignment=ft.alignment.center,
-                        padding=10,
-                    ),
-                    ft.Divider(color="#12324a"),
-                    ft.Text(
-                        "DUNGEON",
-                        color=COLOR_ACCENT,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                    ft.Row(
-                        [self.dungeon_floors_field, self.dungeon_btn],
-                        spacing=8,
-                    ),
-                    ft.Container(
-                        self.dungeon_log,
-                        padding=10,
-                        height=140,
+                        padding=12,
                         border_radius=12,
-                        bgcolor=ft.colors.with_opacity(0.06, "#ffffff"),
-                        border=ft.border.all(1, "#1e3a5f"),
+                        bgcolor=CARD_BG,
+                        border=ft.border.all(1, BORDER_COLOR),
+                    ),
+                    # Dungeon Card
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    "DUNGEON GATE",
+                                    size=13,
+                                    color=COLOR_ACCENT,
+                                    weight=ft.FontWeight.BOLD,
+                                ),
+                                ft.Row(
+                                    [self.dungeon_floors_field, self.dungeon_btn],
+                                    spacing=6,
+                                ),
+                                ft.Container(
+                                    content=ft.Column(
+                                        [self.dungeon_log], scroll=ft.ScrollMode.AUTO
+                                    ),
+                                    height=110,
+                                    padding=8,
+                                    border_radius=8,
+                                    bgcolor=GLASS_BG,
+                                    border=ft.border.all(1, "#12324a"),
+                                ),
+                            ],
+                            spacing=6,
+                        ),
+                        padding=12,
+                        border_radius=12,
+                        bgcolor=CARD_BG,
+                        border=ft.border.all(1, BORDER_COLOR),
+                        expand=True,
                     ),
                 ],
-                spacing=12,
-                scroll=ft.ScrollMode.AUTO,
+                spacing=10,
                 expand=True,
+            ),
+            expand=1,
+        )
+
+        # Assembly: Right Panel (Quests + Centered Timer)
+        right_panel = ft.Container(
+            content=ft.Column(
+                [
+                    # Standard Quests Card
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    "ACTIVE QUESTS",
+                                    size=13,
+                                    color=COLOR_ACCENT,
+                                    weight=ft.FontWeight.BOLD,
+                                ),
+                                ft.Row(
+                                    [
+                                        self.quest_title_field,
+                                        self.quest_exp_field,
+                                        self.add_quest_btn,
+                                    ],
+                                    spacing=6,
+                                ),
+                                ft.Container(
+                                    content=self.quests_list,
+                                    height=140,
+                                    padding=6,
+                                    border_radius=8,
+                                    bgcolor=GLASS_BG,
+                                    border=ft.border.all(1, "#12324a"),
+                                ),
+                            ],
+                            spacing=6,
+                        ),
+                        padding=12,
+                        border_radius=12,
+                        bgcolor=CARD_BG,
+                        border=ft.border.all(1, BORDER_COLOR),
+                    ),
+                    # Focus Quest & Centered Ring Timer Card
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Row(
+                                    [
+                                        ft.Text(
+                                            "FOCUS QUEST",
+                                            size=13,
+                                            color=COLOR_ACCENT,
+                                            weight=ft.FontWeight.BOLD,
+                                        ),
+                                        self.timer_status_text,
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                ),
+                                ft.Row(
+                                    [self.timer_minutes_field, self.timer_title_field],
+                                    spacing=6,
+                                ),
+                                ft.Row(
+                                    [
+                                        ft.Container(
+                                            self.ring, alignment=ft.alignment.center
+                                        ),
+                                        ft.Column(
+                                            [
+                                                self.timer_start_btn,
+                                                self.timer_abort_btn,
+                                            ],
+                                            spacing=8,
+                                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                ),
+                            ],
+                            spacing=6,
+                        ),
+                        padding=12,
+                        border_radius=12,
+                        bgcolor=CARD_BG,
+                        border=ft.border.all(1, BORDER_COLOR),
+                        expand=True,
+                    ),
+                ],
+                spacing=10,
+                expand=True,
+            ),
+            expand=1,
+        )
+
+        # Root Layout: Two side-by-side columns that fit perfectly in standard screens
+        self.page.add(
+            ft.Row(
+                [left_panel, right_panel],
+                spacing=12,
+                expand=True,
+                vertical_alignment=ft.CrossAxisAlignment.START,
             )
         )
 
         self._refresh_profiles()
 
     # ------------------------------------------------------------------
-    # Segmented timer ring
+    # Segmented timer ring (Geometrically centered text)
     # ------------------------------------------------------------------
     def _build_segmented_ring(self) -> ft.Stack:
         self.dots: list[ft.Container] = []
         radius = RING_DIAMETER / 2
         controls = []
 
+        # Circular dots
         for index in range(TICK_COUNT):
             angle = 2 * math.pi * index / TICK_COUNT - math.pi / 2
             center_x = CENTER_OFFSET + radius * math.cos(angle)
@@ -334,24 +421,17 @@ class SoloLevelingView:
             self.dots.append(dot)
             controls.append(dot)
 
+        # Geometrically centered countdown text only
         controls.append(
             ft.Container(
-                ft.Column(
-                    [self.countdown_text, self.timer_status_text],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=2,
-                ),
+                content=self.countdown_text,
                 width=STACK_SIZE,
                 height=STACK_SIZE,
                 alignment=ft.alignment.center,
             )
         )
 
-        return ft.Stack(
-            controls,
-            width=STACK_SIZE,
-            height=STACK_SIZE,
-        )
+        return ft.Stack(controls, width=STACK_SIZE, height=STACK_SIZE)
 
     def _update_ring(self, fraction_active: float) -> None:
         fraction_active = max(0.0, min(1.0, fraction_active))
@@ -437,27 +517,37 @@ class SoloLevelingView:
             row_controls = [
                 ft.Text(
                     ("✔ " if completed else "• ") + quest.title,
-                    color="#4ade80" if completed else "#ffffff",
+                    color=COLOR_SUCCESS if completed else "#ffffff",
+                    size=12,
                     expand=True,
                 ),
                 ft.Text(
                     f"+{quest.exp_reward} XP",
                     color=COLOR_ACTIVE,
-                    size=12,
+                    size=11,
                 ),
             ]
 
             if not completed:
                 row_controls.append(
                     ft.ElevatedButton(
-                        "Complete",
+                        "Done",
+                        height=28,
                         on_click=lambda e, q=quest: self._complete_quest(q),
                     )
                 )
 
-            rows.append(ft.Row(row_controls, spacing=8))
+            rows.append(
+                ft.Row(
+                    row_controls,
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+            )
 
-        self.quests_list.controls = rows or [ft.Text("No quests yet.", color="#64748b")]
+        self.quests_list.controls = rows or [
+            ft.Text("No quests yet.", color="#64748b", size=12)
+        ]
         self.page.update()
 
     def _on_add_quest(self, e) -> None:
@@ -500,10 +590,7 @@ class SoloLevelingView:
 
         self._refresh_hud()
         self._refresh_quests()
-        _snack(
-            self.page,
-            f"Quest completed! +{quest.exp_reward} XP earned.",
-        )
+        _snack(self.page, f"Quest completed! +{quest.exp_reward} XP earned.")
 
     # ------------------------------------------------------------------
     # Timed focus quest
@@ -521,11 +608,7 @@ class SoloLevelingView:
         title = (self.timer_title_field.value or "").strip() or "Focus Quest"
 
         if minutes is None:
-            _snack(
-                self.page,
-                "Minutes must be a positive finite number.",
-                ok=False,
-            )
+            _snack(self.page, "Minutes must be a positive finite number.", ok=False)
             return
 
         self.timer_total = minutes * 60.0
@@ -599,7 +682,7 @@ class SoloLevelingView:
         self._refresh_hud()
         self._refresh_quests()
         self._reset_timer_ui("Completed ✔")
-        self.countdown_text.color = "#4ade80"
+        self.countdown_text.color = COLOR_SUCCESS
         self.page.update()
         _snack(self.page, f"Focus complete! +{reward} XP earned.")
 
@@ -634,8 +717,7 @@ class SoloLevelingView:
             reward = XP_PER_FLOOR
             total_exp += reward
             lines.append(
-                f"✔ Floor {floor_no}: {room['info']} | "
-                f"{room['difficulty']} | +{reward} XP"
+                f"✔ Floor {floor_no}: {room['info']} | {room['difficulty']} | +{reward} XP"
             )
 
         lines.append(f"— Run complete: {len(lines)} floors, +{total_exp} XP total —")
@@ -646,16 +728,4 @@ class SoloLevelingView:
         self._refresh_hud()
         self.page.update()
 
-        _snack(
-            self.page,
-            f"Dungeon cleared! +{total_exp} XP " f"(+{XP_PER_FLOOR}/floor).",
-        )
-
-
-def main(page: ft.Page) -> None:
-    page.theme_mode = ft.ThemeMode.DARK
-    SoloLevelingView(page)
-
-
-if __name__ == "__main__":
-    ft.app(target=main)
+        _snack(self.page, f"Dungeon cleared! +{total_exp} XP (+{XP_PER_FLOOR}/floor).")
