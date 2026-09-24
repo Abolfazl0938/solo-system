@@ -1,285 +1,661 @@
-"""Modern Dark-Themed GUI View for SoloSystem using Flet."""
+"""
+Solo Leveling UI — ui/app_view.py
+Flet 0.24.0 compatible view:
+profiles, HUD, standard quests, timed focus quest, and dungeon.
 
-from __future__ import annotations
+The focus timer uses page.run_task() and asyncio.sleep().
+"""
+
+import asyncio
+import math
+import os
+import sys
 
 import flet as ft
+
+# Make the project root importable when running gui_main.py directly.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+
 from core.models import Player, Quest, QuestStatus
 from services.dungeon_service import generate_dungeon_run
 from services.storage_service import StorageService
-from services.time_service import TimeService
+
+TICK_COUNT = 60
+RING_DIAMETER = 140
+STACK_SIZE = 200
+CENTER_OFFSET = STACK_SIZE / 2
+DOT_SIZE = 8
+
+COLOR_ACTIVE = "#00e5ff"
+COLOR_INACTIVE = "#12324a"
+COLOR_ACCENT = "#a855f7"
+GLASS_BG = "#0a0f1e"
+
+FLOOR_CAP = 20
+XP_PER_FLOOR = 25
 
 
-class SoloSystemApp:
-    """Main Application View Controller managing UI state and services."""
+def _snack(page: ft.Page, message: str, ok: bool = True) -> None:
+    """Show a short status message."""
+    snack = ft.SnackBar(
+        content=ft.Text(
+            message,
+            color="#0a0f1e" if ok else "#ffffff",
+            weight=ft.FontWeight.BOLD,
+        ),
+        bgcolor=COLOR_ACTIVE if ok else COLOR_ACCENT,
+        duration=3000,
+    )
+    page.open(snack)
 
-    def __init__(self, page: ft.Page) -> None:
+
+def validate_minutes(value: str | None) -> float | None:
+    """Return positive finite minutes, or None for invalid input."""
+    try:
+        minutes = float(value or "")
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(minutes) or minutes <= 0:
+        return None
+
+    return minutes
+
+
+def validate_nonnegative_int(value: str | None) -> int | None:
+    """Return a non-negative integer, or None for invalid input."""
+    try:
+        number = float(value or "")
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(number) or not number.is_integer() or number < 0:
+        return None
+
+    return int(number)
+
+
+def validate_positive_int(value: str | None) -> int | None:
+    """Return a positive integer, or None for invalid input."""
+    number = validate_nonnegative_int(value)
+    if number is None or number == 0:
+        return None
+    return number
+
+
+class SoloLevelingView:
+    def __init__(self, page: ft.Page):
         self.page = page
-        self.storage = StorageService()
+        self.player: Player | None = None
+        self.current_profile_name: str | None = None
 
-        # Load initial profile
-        profiles = self.storage.list_profiles()
-        initial_name = profiles[0] if profiles else "Sung Jin-Woo"
-        self.current_player: Player = self.storage.load_profile(initial_name)
+        self.timer_running = False
+        self.timer_task_started = False
+        self.timer_total = 0.0
+        self.timer_remaining = 0.0
+        self.timer_quest_title = ""
 
-        self._init_window()
-        self._build_components()
-        self._render()
+        self._build_ui()
 
-    def _init_window(self) -> None:
-        self.page.title = "SOLO SYSTEM // AWAKENED INTERFACE"
-        self.page.bgcolor = "#0B0F19"
-        self.page.padding = 24
-        self.page.theme_mode = ft.ThemeMode.DARK
+    def _build_ui(self) -> None:
+        self.page.bgcolor = GLASS_BG
+        self.page.title = "Solo Leveling — Hunter System"
+        self.page.padding = 20
 
-    def _build_components(self) -> None:
-        # Header Info
-        self.txt_title = ft.Text(
-            "SYSTEM ACTIVE", size=22, weight=ft.FontWeight.BOLD, color="#38BDF8"
+        # Profile controls
+        self.profile_dropdown = ft.Dropdown(
+            label="Select Hunter Profile",
+            width=280,
+            options=[],
+            on_change=self._on_profile_selected,
         )
-        self.txt_system_time = ft.Text(
-            TimeService.format_dual_timestamp(), size=12, color="#94A3B8"
+        self.new_profile_field = ft.TextField(
+            label="New Hunter Name",
+            width=180,
+            hint_text="e.g. Sung Jin-Woo",
+        )
+        self.create_profile_btn = ft.ElevatedButton(
+            "＋ Create Profile",
+            on_click=self._on_create_profile,
         )
 
-        # Profile Switcher
-        self.dd_profiles = ft.Dropdown(
-            label="Active Player Profile",
-            width=230,
-            dense=True,
-            color="#FFFFFF",
+        # Player HUD
+        self.name_text = ft.Text(
+            "—",
+            size=26,
+            weight=ft.FontWeight.BOLD,
+            color=COLOR_ACTIVE,
         )
-        self._refresh_profile_dropdown()
-        self.dd_profiles.on_change = self._on_profile_switch
-
-        # Player Stats
-        self.txt_player_name = ft.Text(
-            size=20, weight=ft.FontWeight.BOLD, color="#FFFFFF"
+        self.rank_text = ft.Text(
+            "Rank: —",
+            color=COLOR_ACCENT,
+            weight=ft.FontWeight.BOLD,
         )
-        self.txt_rank = ft.Text(size=14, weight=ft.FontWeight.BOLD, color="#F59E0B")
-        self.txt_level = ft.Text(size=14, color="#E2E8F0")
-        self.pb_exp = ft.ProgressBar(
-            value=0.0, color="#38BDF8", bgcolor="#1E293B", height=10
+        self.level_text = ft.Text("Level: —", color="#ffffff")
+        self.exp_text = ft.Text("EXP: —", color="#9fb8c8")
+        self.progress_bar = ft.ProgressBar(
+            value=0,
+            width=320,
+            color=COLOR_ACTIVE,
+            bgcolor="#12324a",
         )
-        self.txt_exp = ft.Text(size=12, color="#94A3B8")
 
-        # Layout Containers
-        self.col_active_quests = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
-        self.col_archived_quests = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO)
-
-        self.tf_quest_title = ft.TextField(
-            label="Quest Objective", expand=True, dense=True
+        # Standard quests
+        self.quest_title_field = ft.TextField(
+            label="Quest Title",
+            width=280,
         )
-        self.tf_quest_exp = ft.TextField(label="EXP", value="50", width=90, dense=True)
+        self.quest_exp_field = ft.TextField(
+            label="EXP Reward",
+            width=120,
+            hint_text="e.g. 50",
+        )
+        self.add_quest_btn = ft.ElevatedButton(
+            "Add Quest",
+            on_click=self._on_add_quest,
+        )
+        self.quests_list = ft.Column(
+            spacing=8,
+            scroll=ft.ScrollMode.AUTO,
+        )
 
-        self.txt_dungeon_log = ft.Text(
-            "Standing by for Dungeon Gate scan...\n",
+        # Timed focus quest
+        self.timer_minutes_field = ft.TextField(
+            label="Minutes",
+            width=100,
+            hint_text="25",
+            value="25",
+        )
+        self.timer_title_field = ft.TextField(
+            label="Focus Quest Title",
+            width=170,
+            hint_text="Deep Work",
+        )
+        self.timer_start_btn = ft.ElevatedButton(
+            "▶ Start Focus",
+            on_click=self._on_start_timer,
+        )
+        self.timer_abort_btn = ft.ElevatedButton(
+            "■ Abort",
+            on_click=self._on_abort_timer,
+            disabled=True,
+        )
+        self.countdown_text = ft.Text(
+            "00:00",
+            size=30,
+            weight=ft.FontWeight.BOLD,
+            color=COLOR_ACTIVE,
+        )
+        self.timer_status_text = ft.Text(
+            "Ready",
+            color="#9fb8c8",
             size=12,
-            font_family="Consolas",
-            color="#A7F3D0",
+        )
+        self.ring = self._build_segmented_ring()
+
+        # Dungeon
+        self.dungeon_log = ft.Text(
+            "",
+            color="#9fb8c8",
+            size=12,
+            selectable=True,
+            expand=True,
+        )
+        self.dungeon_floors_field = ft.TextField(
+            label="Floors",
+            width=80,
+            value="5",
+        )
+        self.dungeon_btn = ft.ElevatedButton(
+            "⚔ Enter Dungeon",
+            on_click=self._on_enter_dungeon,
         )
 
-    def _refresh_profile_dropdown(self) -> None:
-        profiles = self.storage.list_profiles()
-        self.dd_profiles.options = [ft.dropdown.Option(p) for p in profiles]
-        self.dd_profiles.value = self.current_player.name
-
-    def _refresh_state(self) -> None:
-        p = self.current_player
-        self.txt_player_name.value = p.name.upper()
-        self.txt_rank.value = f"RANK: {p.rank}"
-        self.txt_level.value = f"LVL: {p.level}"
-
-        req_exp = p.exp_to_next_level
-        progress = min(p.exp / req_exp, 1.0) if req_exp > 0 else 0.0
-        self.pb_exp.value = progress
-        self.txt_exp.value = f"EXP: {p.exp} / {req_exp} ({int(progress * 100)}%)"
-
-        # Active Quests
-        self.col_active_quests.controls.clear()
-        active_quests = [q for q in p.quests if q.status == QuestStatus.PENDING]
-        if not active_quests:
-            self.col_active_quests.controls.append(
-                ft.Text("No active quests remaining.", color="#64748B", size=13)
-            )
-        else:
-            for q in active_quests:
-                self.col_active_quests.controls.append(self._build_quest_card(q))
-
-        # History
-        self.col_archived_quests.controls.clear()
-        history = [q for q in p.quests if q.status != QuestStatus.PENDING]
-        for q in reversed(history[-6:]):
-            color = "#10B981" if q.status == QuestStatus.COMPLETED else "#EF4444"
-            self.col_archived_quests.controls.append(
-                ft.Container(
-                    content=ft.Row(
+        # Page layout
+        self.page.add(
+            ft.Column(
+                [
+                    ft.Row(
                         [
-                            ft.Text(q.title, size=12, expand=True),
-                            ft.Text(f"[{q.status.value}]", color=color),
+                            self.profile_dropdown,
+                            self.new_profile_field,
+                            self.create_profile_btn,
                         ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
+                        spacing=8,
                     ),
-                    padding=6,
-                    bgcolor="#0F172A",
-                    border_radius=4,
-                )
-            )
-        self.txt_system_time.value = TimeService.format_dual_timestamp()
-        self.page.update()
-
-    def _build_quest_card(self, quest: Quest) -> ft.Container:
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.Column(
+                    ft.Divider(color="#12324a"),
+                    ft.Container(
+                        ft.Column(
+                            [
+                                self.name_text,
+                                self.rank_text,
+                                self.level_text,
+                                self.exp_text,
+                                self.progress_bar,
+                            ]
+                        ),
+                        padding=16,
+                        border_radius=16,
+                        bgcolor=ft.colors.with_opacity(0.08, "#ffffff"),
+                        border=ft.border.all(1, "#1e3a5f"),
+                    ),
+                    ft.Divider(color="#12324a"),
+                    ft.Text(
+                        "STANDARD QUESTS",
+                        color=COLOR_ACCENT,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                    ft.Row(
                         [
-                            ft.Text(quest.title, weight=ft.FontWeight.BOLD),
-                            ft.Text(f"{quest.exp_reward} EXP", size=11),
+                            self.quest_title_field,
+                            self.quest_exp_field,
+                            self.add_quest_btn,
                         ],
-                        expand=True,
+                        wrap=True,
+                        spacing=8,
                     ),
-                    ft.ElevatedButton(
-                        "Complete",
-                        bgcolor="#059669",
-                        color="white",
-                        on_click=lambda _: self._complete_quest(quest),
+                    self.quests_list,
+                    ft.Divider(color="#12324a"),
+                    ft.Text(
+                        "TIMED FOCUS QUEST",
+                        color=COLOR_ACCENT,
+                        weight=ft.FontWeight.BOLD,
                     ),
-                    ft.ElevatedButton(
-                        "Fail",
-                        bgcolor="#DC2626",
-                        color="white",
-                        on_click=lambda _: self._fail_quest(quest),
-                    ),
-                ]
-            ),
-            bgcolor="#1E293B",
-            padding=12,
-            border_radius=8,
-        )
-
-    def _render(self) -> None:
-        header = ft.Container(
-            content=ft.Row(
-                [ft.Column([self.txt_title, self.txt_system_time]), self.dd_profiles],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            padding=10,
-        )
-
-        stats_card = ft.Container(
-            content=ft.Column(
-                [
                     ft.Row(
-                        [self.txt_player_name, self.txt_rank, self.txt_level],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        [self.timer_minutes_field, self.timer_title_field],
+                        wrap=True,
+                        spacing=8,
                     ),
-                    self.pb_exp,
-                    self.txt_exp,
-                ]
-            ),
-            bgcolor="#1E293B",
-            padding=16,
-            border_radius=8,
-        )
-
-        quest_form = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text("ISSUE NEW QUEST", size=12, color="#94A3B8"),
                     ft.Row(
                         [
-                            self.tf_quest_title,
-                            self.tf_quest_exp,
-                            ft.ElevatedButton(
-                                "Add", bgcolor="#2563EB", on_click=self._on_add_quest
-                            ),
-                        ]
-                    ),
-                ]
-            ),
-            bgcolor="#111827",
-            padding=14,
-            border_radius=8,
-        )
-
-        dungeon_box = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text("DUNGEON GATE TERMINAL", size=12, color="#38BDF8"),
-                            ft.ElevatedButton(
-                                "Enter Gate",
-                                bgcolor="#7C3AED",
-                                on_click=self._on_enter_dungeon,
-                            ),
-                        ]
+                            self.timer_start_btn,
+                            self.timer_abort_btn,
+                            self.timer_status_text,
+                        ],
+                        spacing=8,
                     ),
                     ft.Container(
-                        content=self.txt_dungeon_log,
-                        bgcolor="#030712",
+                        self.ring,
+                        alignment=ft.alignment.center,
                         padding=10,
-                        border_radius=6,
-                        height=110,
                     ),
-                ]
-            ),
-            bgcolor="#111827",
-            padding=14,
-            border_radius=8,
-        )
-
-        self.page.add(
-            header,
-            ft.Row(
-                [
-                    ft.Column(
-                        [stats_card, quest_form, self.col_active_quests], expand=2
+                    ft.Divider(color="#12324a"),
+                    ft.Text(
+                        "DUNGEON",
+                        color=COLOR_ACCENT,
+                        weight=ft.FontWeight.BOLD,
                     ),
-                    ft.Column([dungeon_box, self.col_archived_quests], expand=1),
+                    ft.Row(
+                        [self.dungeon_floors_field, self.dungeon_btn],
+                        spacing=8,
+                    ),
+                    ft.Container(
+                        self.dungeon_log,
+                        padding=10,
+                        height=140,
+                        border_radius=12,
+                        bgcolor=ft.colors.with_opacity(0.06, "#ffffff"),
+                        border=ft.border.all(1, "#1e3a5f"),
+                    ),
                 ],
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            ),
+                spacing=12,
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
+            )
         )
-        self._refresh_state()
 
-    def _on_profile_switch(self, e) -> None:
-        self.current_player = self.storage.load_profile(self.dd_profiles.value)
-        self._refresh_state()
+        self._refresh_profiles()
+
+    # ------------------------------------------------------------------
+    # Segmented timer ring
+    # ------------------------------------------------------------------
+    def _build_segmented_ring(self) -> ft.Stack:
+        self.dots: list[ft.Container] = []
+        radius = RING_DIAMETER / 2
+        controls = []
+
+        for index in range(TICK_COUNT):
+            angle = 2 * math.pi * index / TICK_COUNT - math.pi / 2
+            center_x = CENTER_OFFSET + radius * math.cos(angle)
+            center_y = CENTER_OFFSET + radius * math.sin(angle)
+
+            dot = ft.Container(
+                width=DOT_SIZE,
+                height=DOT_SIZE,
+                border_radius=DOT_SIZE / 2,
+                bgcolor=COLOR_INACTIVE,
+                left=center_x - DOT_SIZE / 2,
+                top=center_y - DOT_SIZE / 2,
+            )
+            self.dots.append(dot)
+            controls.append(dot)
+
+        controls.append(
+            ft.Container(
+                ft.Column(
+                    [self.countdown_text, self.timer_status_text],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=2,
+                ),
+                width=STACK_SIZE,
+                height=STACK_SIZE,
+                alignment=ft.alignment.center,
+            )
+        )
+
+        return ft.Stack(
+            controls,
+            width=STACK_SIZE,
+            height=STACK_SIZE,
+        )
+
+    def _update_ring(self, fraction_active: float) -> None:
+        fraction_active = max(0.0, min(1.0, fraction_active))
+        active_count = round(fraction_active * TICK_COUNT)
+
+        for index, dot in enumerate(self.dots):
+            dot.bgcolor = COLOR_ACTIVE if index < active_count else COLOR_INACTIVE
+
+    @staticmethod
+    def _format_mmss(seconds: float) -> str:
+        remaining = max(0, int(round(seconds)))
+        return f"{remaining // 60:02d}:{remaining % 60:02d}"
+
+    # ------------------------------------------------------------------
+    # Profiles
+    # ------------------------------------------------------------------
+    def _refresh_profiles(self) -> None:
+        names = StorageService.list_profiles()
+        self.profile_dropdown.options = [ft.dropdown.Option(name) for name in names]
+        self.page.update()
+
+    def _on_create_profile(self, e) -> None:
+        name = (self.new_profile_field.value or "").strip()
+        if not name:
+            _snack(self.page, "Hunter name cannot be empty.", ok=False)
+            return
+
+        if name in StorageService.list_profiles():
+            _snack(self.page, "Profile already exists.", ok=False)
+            return
+
+        player = Player(name=name)
+        StorageService.save_profile(player)
+
+        self.new_profile_field.value = ""
+        self._refresh_profiles()
+        self.profile_dropdown.value = name
+        self._load_player(name)
+        _snack(self.page, f"Hunter '{name}' awakened!")
+
+    def _on_profile_selected(self, e) -> None:
+        name = self.profile_dropdown.value
+        if name:
+            self._load_player(name)
+
+    def _load_player(self, name: str) -> None:
+        self.current_profile_name = name
+        self.player = StorageService.load_profile(name)
+
+        if self.player is None:
+            _snack(self.page, f"Profile '{name}' not found.", ok=False)
+            return
+
+        self._refresh_hud()
+        self._refresh_quests()
+
+    def _refresh_hud(self) -> None:
+        if not self.player:
+            return
+
+        self.name_text.value = self.player.name
+        self.rank_text.value = f"Rank: {self.player.rank}"
+        self.level_text.value = f"Level: {self.player.level}"
+        self.exp_text.value = (
+            f"EXP: {self.player.exp} / {self.player.exp_to_next_level}"
+        )
+
+        exp_target = self.player.exp_to_next_level
+        self.progress_bar.value = self.player.exp / exp_target if exp_target else 0
+        self.page.update()
+
+    # ------------------------------------------------------------------
+    # Standard quests
+    # ------------------------------------------------------------------
+    def _refresh_quests(self) -> None:
+        if not self.player:
+            return
+
+        rows = []
+        for quest in self.player.quests:
+            completed = quest.status == QuestStatus.COMPLETED
+
+            row_controls = [
+                ft.Text(
+                    ("✔ " if completed else "• ") + quest.title,
+                    color="#4ade80" if completed else "#ffffff",
+                    expand=True,
+                ),
+                ft.Text(
+                    f"+{quest.exp_reward} XP",
+                    color=COLOR_ACTIVE,
+                    size=12,
+                ),
+            ]
+
+            if not completed:
+                row_controls.append(
+                    ft.ElevatedButton(
+                        "Complete",
+                        on_click=lambda e, q=quest: self._complete_quest(q),
+                    )
+                )
+
+            rows.append(ft.Row(row_controls, spacing=8))
+
+        self.quests_list.controls = rows or [ft.Text("No quests yet.", color="#64748b")]
+        self.page.update()
 
     def _on_add_quest(self, e) -> None:
-        if self.tf_quest_title.value:
-            new_quest = Quest(
-                title=self.tf_quest_title.value,
-                exp_reward=int(self.tf_quest_exp.value or 0),
-            )
-            self.current_player.quests.append(new_quest)
-            self.storage.save_profile(self.current_player)
-            self._refresh_state()
+        if not self.player:
+            _snack(self.page, "Select a hunter profile first.", ok=False)
+            return
+
+        title = (self.quest_title_field.value or "").strip()
+        exp = validate_nonnegative_int(self.quest_exp_field.value or "0")
+
+        if not title:
+            _snack(self.page, "Quest title cannot be empty.", ok=False)
+            return
+
+        if exp is None:
+            _snack(self.page, "EXP must be a non-negative integer.", ok=False)
+            return
+
+        quest = Quest(title=title, exp_reward=exp)
+        self.player.quests.append(quest)
+        StorageService.save_profile(self.player)
+
+        self.quest_title_field.value = ""
+        self.quest_exp_field.value = ""
+        self._refresh_hud()
+        self._refresh_quests()
+        _snack(self.page, f"Quest '{title}' registered!")
 
     def _complete_quest(self, quest: Quest) -> None:
-        quest.complete()
-        self.current_player.add_exp(quest.exp_reward)
-        self.storage.save_profile(self.current_player)
-        self._refresh_state()
+        if not self.player:
+            _snack(self.page, "Select a hunter profile first.", ok=False)
+            return
 
-    def _fail_quest(self, quest: Quest) -> None:
-        quest.status = QuestStatus.FAILED
-        quest.completed_at = TimeService.get_current_timestamps()
-        self.storage.save_profile(self.current_player)
-        self._refresh_state()
+        if quest.status == QuestStatus.COMPLETED:
+            return
 
-    def _on_enter_dungeon(self, e) -> None:
-        self.txt_dungeon_log.value = "[GATE DETECTED] Scanning...\n"
+        quest.status = QuestStatus.COMPLETED
+        self.player.add_exp(quest.exp_reward)
+        StorageService.save_profile(self.player)
+
+        self._refresh_hud()
+        self._refresh_quests()
+        _snack(
+            self.page,
+            f"Quest completed! +{quest.exp_reward} XP earned.",
+        )
+
+    # ------------------------------------------------------------------
+    # Timed focus quest
+    # ------------------------------------------------------------------
+    def _on_start_timer(self, e) -> None:
+        if self.timer_running:
+            _snack(self.page, "Focus timer already running.", ok=False)
+            return
+
+        if not self.player:
+            _snack(self.page, "Select a hunter profile first.", ok=False)
+            return
+
+        minutes = validate_minutes(self.timer_minutes_field.value)
+        title = (self.timer_title_field.value or "").strip() or "Focus Quest"
+
+        if minutes is None:
+            _snack(
+                self.page,
+                "Minutes must be a positive finite number.",
+                ok=False,
+            )
+            return
+
+        self.timer_total = minutes * 60.0
+        self.timer_remaining = self.timer_total
+        self.timer_quest_title = title
+        self.timer_running = True
+        self.timer_task_started = False
+
+        self.timer_start_btn.disabled = True
+        self.timer_abort_btn.disabled = False
+        self.timer_status_text.value = "Focusing…"
+        self.countdown_text.color = COLOR_ACTIVE
+        self.countdown_text.value = self._format_mmss(self.timer_remaining)
+        self._update_ring(1.0)
         self.page.update()
-        total_exp = 0
-        log = []
-        for room in generate_dungeon_run(3):
-            gained = (room["floor"]) * 30
-            total_exp += gained
-            log.append(f"• {room['info']} ({room['difficulty']}) -> +{gained} EXP")
 
-        self.current_player.add_exp(total_exp)
-        self.storage.save_profile(self.current_player)
-        log.append(f"\n[CLEARED] Total: +{total_exp} EXP!")
-        self.txt_dungeon_log.value = "\n".join(log)
-        self._refresh_state()
+        self.page.run_task(self._timer_loop_async)
+
+    async def _timer_loop_async(self) -> None:
+        if self.timer_task_started:
+            return
+
+        self.timer_task_started = True
+        try:
+            while self.timer_running and self.timer_remaining > 0:
+                await asyncio.sleep(1)
+
+                if not self.timer_running:
+                    break
+
+                self.timer_remaining = max(0.0, self.timer_remaining - 1)
+                fraction = (
+                    self.timer_remaining / self.timer_total if self.timer_total else 0
+                )
+                self._update_ring(fraction)
+                self.countdown_text.value = self._format_mmss(self.timer_remaining)
+                self.page.update()
+
+            if self.timer_running and self.timer_remaining <= 0:
+                self._complete_focus_quest()
+        finally:
+            self.timer_task_started = False
+
+    def _on_abort_timer(self, e) -> None:
+        if not self.timer_running:
+            return
+
+        self.timer_running = False
+        self._reset_timer_ui("Aborted")
+        _snack(self.page, "Focus session aborted.", ok=False)
+
+    def _complete_focus_quest(self) -> None:
+        self.timer_running = False
+
+        if not self.player:
+            self._reset_timer_ui("Done")
+            return
+
+        minutes = max(1, int(self.timer_total // 60))
+        reward = minutes * 10
+        quest = Quest(
+            title=f"[Focus] {self.timer_quest_title} ({minutes} min)",
+            exp_reward=reward,
+            status=QuestStatus.COMPLETED,
+        )
+
+        self.player.quests.append(quest)
+        self.player.add_exp(reward)
+        StorageService.save_profile(self.player)
+
+        self._refresh_hud()
+        self._refresh_quests()
+        self._reset_timer_ui("Completed ✔")
+        self.countdown_text.color = "#4ade80"
+        self.page.update()
+        _snack(self.page, f"Focus complete! +{reward} XP earned.")
+
+    def _reset_timer_ui(self, status: str) -> None:
+        self.timer_start_btn.disabled = False
+        self.timer_abort_btn.disabled = True
+        self.timer_status_text.value = status
+        self.countdown_text.value = "00:00"
+        self.countdown_text.color = COLOR_ACTIVE
+        self._update_ring(0.0)
+        self.page.update()
+
+    # ------------------------------------------------------------------
+    # Dungeon
+    # ------------------------------------------------------------------
+    def _on_enter_dungeon(self, e) -> None:
+        if not self.player:
+            _snack(self.page, "Select a hunter profile first.", ok=False)
+            return
+
+        floors = validate_positive_int(self.dungeon_floors_field.value)
+        if floors is None:
+            _snack(self.page, "Floors must be a positive integer.", ok=False)
+            return
+
+        floors = min(floors, FLOOR_CAP)
+        lines = []
+        total_exp = 0
+
+        for room in generate_dungeon_run(floors):
+            floor_no = int(room["floor"])
+            reward = XP_PER_FLOOR
+            total_exp += reward
+            lines.append(
+                f"✔ Floor {floor_no}: {room['info']} | "
+                f"{room['difficulty']} | +{reward} XP"
+            )
+
+        lines.append(f"— Run complete: {len(lines)} floors, +{total_exp} XP total —")
+        self.dungeon_log.value = "\n".join(lines)
+
+        self.player.add_exp(total_exp)
+        StorageService.save_profile(self.player)
+        self._refresh_hud()
+        self.page.update()
+
+        _snack(
+            self.page,
+            f"Dungeon cleared! +{total_exp} XP " f"(+{XP_PER_FLOOR}/floor).",
+        )
+
+
+def main(page: ft.Page) -> None:
+    page.theme_mode = ft.ThemeMode.DARK
+    SoloLevelingView(page)
+
+
+if __name__ == "__main__":
+    ft.app(target=main)
